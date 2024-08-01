@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Amenities Scored for Your Region Based on Walkability</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.css" />
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+        }
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        #locationList {
+            margin-top: 20px;
+        }
+        #legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+            line-height: 18px;
+            color: #555;
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .legend-item img {
+            width: 24px; /* Reduced size of icons */
+            height: 24px;
+            margin-right: 8px;
+        }
+        #locationDetails {
+            margin-top: 20px;
+            background: #f8f8f8;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            font-size: 16px;
+        }
+        #locationList {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+        }
+        .category {
+            flex: 1;
+            min-width: 150px;
+            margin-right: 20px;
+        }
+        .category h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .category ul {
+            list-style: none;
+            padding: 0;
+        }
+        .category ul li {
+            margin-bottom: 5px;
+        }
+        #chart-container {
+            position: relative;
+            height: 400px;
+            width: 400px;
+            margin: auto;
+        }
+        #score {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Amenities Scored for Your Region Based on Walkability</h2>
+    <div id="map"></div>
+    <div id="locationDetails">
+        <div id="locationList">
+            <div class="category" id="restaurants">
+                <h3>Restaurants</h3>
+                <ul></ul>
+            </div>
+            <div class="category" id="schools">
+                <h3>Schools</h3>
+                <ul></ul>
+            </div>
+            <div class="category" id="hospitals">
+                <h3>Hospitals</h3>
+                <ul></ul>
+            </div>
+        </div>
+        <div id="chart-container">
+            <canvas id="amenitiesChart"></canvas>
+        </div>
+        <div id="score">Total Amenities Score: 0</div>
+    </div>
+    <div id="legend">
+        <div class="legend-item">
+            <img src="https://i.imgur.com/6fVdfvc.png" alt="Restaurant Icon">
+            <label for="toggleRestaurants">Restaurants</label>
+        </div>
+        <div class="legend-item">
+            <img src="https://i.imgur.com/2PN8MFI.png" alt="School Icon">
+            <label for="toggleSchools">Schools</label>
+        </div>
+        <div class="legend-item">
+            <img src="https://i.imgur.com/QQGlLE0.png" alt="Hospital Icon">
+            <label for="toggleHospitals">Hospitals</label>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.js"></script>
+    <script>
+        let map;
+        let isochroneLayer;
+        let restaurantMarkers = [];
+        let schoolMarkers = [];
+        let hospitalMarkers = [];
+        let clickMarker;
+        let amenitiesData = { restaurants: 0, schools: 0, hospitals: 0 };
+        let amenitiesScore = 0;
+
+        function initializeMap() {
+            map = L.map('map').setView([13.073537218008402, 80.26095142142864], 15); // Default location
+            
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            }).addTo(map);
+
+            map.on('click', onMapClick);
+        }
+
+        function onMapClick(e) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+
+            // Remove previous isochrone layer if it exists
+            if (isochroneLayer) {
+                map.removeLayer(isochroneLayer);
+            }
+
+            // Remove previous click marker if it exists
+            if (clickMarker) {
+                map.removeLayer(clickMarker);
+            }
+
+            // Add click marker with custom icon
+            const clickIcon = L.icon({
+                iconUrl: 'https://i.imgur.com/GBBI2bR.png', // Replace with your custom icon URL
+                iconSize: [32, 32], // Size of the icon
+                iconAnchor: [16, 32], // Anchor point of the icon
+                popupAnchor: [0, -32] // Popup position relative to the icon
+            });
+
+            clickMarker = L.marker([lat, lon], { icon: clickIcon }).addTo(map);
+            clickMarker.bindPopup('You clicked here').openPopup();
+
+            fetchIsochrone(lat, lon);
+            fetchAmenities(lat, lon);
+        }
+
+        function fetchIsochrone(lat, lon) {
+            fetch('https://api.openrouteservice.org/v2/isochrones/foot-walking', {
+                method: 'POST',
+                headers: {
+                    'Authorization': '5b3ce3597851110001cf624851c9b3750ebe4269b7de0cc858e1ee9f',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    locations: [[lon, lat]],
+                    range: [900] // 15 minutes (900 seconds)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                isochroneLayer = L.geoJSON(data, {
+                    style: function() {
+                        return { color: '#ff7800', weight: 2 };
+                    }
+                }).addTo(map);
+            })
+            .catch(error => console.error('Error fetching isochrone data:', error));
+        }
+
+        function calculateScore(element, lat, lon) {
+            const distance = getDistance(lat, lon, element.lat, element.lon); // Calculate distance
+            const baseScores = { restaurant: 10, school: 20, hospital: 30 };
+            const proximityMultiplier = 1 / (distance + 1); // Proximity-based scoring
+            const type = element.tags.amenity;
+            const baseScore = baseScores[type] || 0;
+            return baseScore * proximityMultiplier;
+        }
+
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Radius of Earth in meters
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        function fetchAmenities(lat, lon) {
+            const amenityTypes = ['restaurant', 'school', 'hospital'];
+            const promises = amenityTypes.map(type =>
+                fetch(`https://overpass-api.de/api/interpreter?data=[out:json];node[amenity=${type}](${lat - 0.01},${lon - 0.01},${lat + 0.01},${lon + 0.01});out;`)
+                .then(response => response.json())
+                .then(data => processAmenities(data, type, lat, lon))
+                .catch(error => console.error(`Error fetching ${type} data:`, error))
+            );
+
+            Promise.all(promises).then(() => {
+                updateLocationList();
+                updateChart();
+            });
+        }
+
+        function processAmenities(data, type, lat, lon) {
+            let markers = [];
+            if (type === 'restaurant') markers = restaurantMarkers;
+            else if (type === 'school') markers = schoolMarkers;
+            else if (type === 'hospital') markers = hospitalMarkers;
+
+            data.elements.forEach(element => {
+                const marker = L.marker([element.lat, element.lon], {icon: getIcon(type)}).bindPopup(element.tags.name || type);
+                markers.push(marker);
+
+                const score = calculateScore(element, lat, lon);
+                amenitiesData[type] += score;
+                amenitiesScore += score;
+            });
+
+            markers.forEach(marker => marker.addTo(map));
+        }
+
+        function getIcon(type) {
+            const icons = {
+                restaurant: 'https://i.imgur.com/6fVdfvc.png',
+                school: 'https://i.imgur.com/2PN8MFI.png',
+                hospital: 'https://i.imgur.com/QQGlLE0.png'
+            };
+            return L.icon({
+                iconUrl: icons[type],
+                iconSize: [32, 32],
+                iconAnchor: [16, 32],
+                popupAnchor: [0, -32]
+            });
+        }
+
+        function updateLocationList() {
+            document.getElementById('restaurants').querySelector('ul').innerHTML = restaurantMarkers.map(marker => `<li>${marker.getPopup().getContent()}</li>`).join('');
+            document.getElementById('schools').querySelector('ul').innerHTML = schoolMarkers.map(marker => `<li>${marker.getPopup().getContent()}</li>`).join('');
+            document.getElementById('hospitals').querySelector('ul').innerHTML = hospitalMarkers.map(marker => `<li>${marker.getPopup().getContent()}</li>`).join('');
+        }
+
+        function updateChart() {
+            const ctx = document.getElementById('amenitiesChart').getContext('2d');
+            const data = {
+                labels: ['Restaurants', 'Schools', 'Hospitals'],
+                datasets: [{
+                    label: 'Amenities Score',
+                    data: [amenitiesData.restaurants, amenitiesData.schools, amenitiesData.hospitals],
+                    backgroundColor: ['rgba(255, 99, 132, 0.5)', 'rgba(54, 162, 235, 0.5)', 'rgba(75, 192, 192, 0.5)'],
+                    borderColor: ['rgba(255, 99, 132, 1)', 'rgba(54, 162, 235, 1)', 'rgba(75, 192, 192, 1)'],
+                    borderWidth: 1
+                }]
+            };
+
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: data,
+                options: {
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ' + Math.round(context.raw);
+                                    }
+                                    return label;
+                                }
+                            }
+                        },
+                        legend: {
+                            position: 'top',
+                        },
+                        datalabels: {
+                            color: '#fff',
+                            formatter: (value, context) => {
+                                let sum = 0;
+                                let dataArr = context.chart.data.datasets[0].data;
+                                dataArr.map(data => {
+                                    sum += data;
+                                });
+                                let percentage = ((value / sum) * 100).toFixed(2) + '%';
+                                return percentage;
+                            }
+                        }
+                    },
+                    responsive: true,
+                    maintainAspectRatio: false,
+                }
+            });
+
+            document.getElementById('score').innerText = `Total Amenities Score: ${Math.round(amenitiesScore)}`;
+        }
+
+        initializeMap();
+    </script>
+</body>
+</html>
